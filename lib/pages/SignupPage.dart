@@ -22,9 +22,9 @@ class _SignupPageState extends State<SignupPage> {
     if (uid == null) return;
     final token = await FirebaseMessaging.instance.getToken();
     if (token != null) {
-      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
         'fcmToken': token,
-      });
+      }, SetOptions(merge: true));
     }
   }
 
