@@ -20,13 +20,15 @@ class _ParentCreateAppointmentPageState
   String? _selectedDoctor;
   String? _selectedVaccineId;
   String? _selectedVaccineName;
-  DateTime? _selectedDate;
   int? _childAgeMonths;
-  int _reminderDaysBefore = 1; // default reminder
   List<Map<String, dynamic>> _childData = [];
   List<Map<String, dynamic>> _doctorData = [];
   List<VaccineScheduleItem> _recommendedVaccines = [];
   bool _isLoading = false;
+
+  DateTime? _selectedAppointmentDateTime;
+  DateTime? _selectedReminderDateTime;
+  String _repeatType = "none"; // none, daily, weekly, hourly
 
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -38,20 +40,26 @@ class _ParentCreateAppointmentPageState
     _loadData();
   }
 
+  // -------------------- NOTIFICATION SETUP --------------------
   Future<void> _initializeNotifications() async {
     tz_data.initializeTimeZones();
+
     const AndroidInitializationSettings androidInit =
         AndroidInitializationSettings('@mipmap/ic_launcher');
+
     const InitializationSettings initSettings =
         InitializationSettings(android: androidInit);
+
     await _notificationsPlugin.initialize(initSettings);
 
-    final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+    final androidImplementation =
         _notificationsPlugin.resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
+
     await androidImplementation?.requestNotificationsPermission();
   }
 
+  // -------------------- LOAD CHILDREN & DOCTORS --------------------
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     await Future.wait([
@@ -114,11 +122,24 @@ class _ParentCreateAppointmentPageState
     });
   }
 
+  Future<bool> _requestExactAlarmPermission() async {
+    final androidPlugin = _notificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+
+    if (androidPlugin == null) return false;
+
+    final bool? granted = await androidPlugin.requestExactAlarmsPermission();
+    return granted ?? false;
+  }
+
+  // -------------------- SAVE APPOINTMENT --------------------
   Future<void> _saveAppointment() async {
     if (_selectedChild == null ||
         _selectedDoctor == null ||
         _selectedVaccineId == null ||
-        _selectedDate == null) {
+        _selectedAppointmentDateTime == null ||
+        _selectedReminderDateTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Please fill all fields")),
       );
@@ -136,20 +157,23 @@ class _ParentCreateAppointmentPageState
         "parent_id": uid,
         "vaccination_id": _selectedVaccineId,
         "vaccination_name": _selectedVaccineName,
-        "date": _selectedDate!.toIso8601String(),
+        "date": _selectedAppointmentDateTime!.toIso8601String(),
+        "reminder_time": _selectedReminderDateTime!.toIso8601String(),
+        "repeat_type": _repeatType,
         "status": "pending_approval",
-        "consent_form_signed": false,
         "created_at": DateTime.now().toIso8601String(),
         "updated_at": DateTime.now().toIso8601String(),
       });
 
-      await _scheduleAppointmentNotification();
+      // schedule reminder
+      await _scheduleReminderNotification();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text(
-                  "Appointment request submitted and reminder scheduled.")),
+            content:
+                Text("Appointment submitted & reminder scheduled successfully."),
+          ),
         );
         Navigator.pop(context);
       }
@@ -162,37 +186,40 @@ class _ParentCreateAppointmentPageState
     }
   }
 
-  Future<void> _scheduleAppointmentNotification() async {
-    if (_selectedDate == null || _selectedVaccineName == null) return;
+  // -------------------- NOTIFICATION SCHEDULING --------------------
+  Future<void> _scheduleReminderNotification() async {
+    final reminderTime = _selectedReminderDateTime!;
+    final now = DateTime.now();
 
-    final appointmentTime = _selectedDate!;
-    final reminderTime = appointmentTime.subtract(
-      Duration(days: _reminderDaysBefore),
-    );
+    if (reminderTime.isBefore(now)) {
+      print("❌ Reminder time is in the past — skipping");
+      return;
+    }
 
-    if (reminderTime.isBefore(DateTime.now())) return;
+    final delaySeconds = reminderTime.difference(now).inSeconds;
 
-    await _notificationsPlugin.zonedSchedule(
-      appointmentTime.hashCode,
-      "Vaccination Appointment Reminder",
-      "Upcoming: $_selectedVaccineName on ${appointmentTime.toString().split(' ')[0]}",
-      tz.TZDateTime.from(reminderTime, tz.local),
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          'appointment_channel',
-          'Appointment Reminders',
-          channelDescription: 'Reminds about upcoming vaccination appointments',
-          importance: Importance.high,
-          priority: Priority.high,
+    print("⏳ Simple timer scheduled for $delaySeconds seconds");
+
+    Future.delayed(Duration(seconds: delaySeconds), () async {
+      print("🔔 Triggering scheduled reminder NOW");
+
+      await _notificationsPlugin.show(
+        reminderTime.hashCode,
+        "Vaccination Reminder",
+        "Upcoming: $_selectedVaccineName",
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'simple_channel',
+            'Simple Notifications',
+            importance: Importance.high,
+            priority: Priority.high,
+          ),
         ),
-      ),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-      matchDateTimeComponents: DateTimeComponents.dateAndTime,
-    );
+      );
+    });
   }
 
+  // -------------------- UI --------------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -204,7 +231,7 @@ class _ParentCreateAppointmentPageState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Child Selection
+                  // -------------------- Child Selection --------------------
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(12.0),
@@ -229,21 +256,13 @@ class _ParentCreateAppointmentPageState
                               border: OutlineInputBorder(),
                             ),
                           ),
-                          if (_childData.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.only(top: 8.0),
-                              child: Text(
-                                "No children found. Please add a child first.",
-                                style: TextStyle(color: Colors.red),
-                              ),
-                            ),
                         ],
                       ),
                     ),
                   ),
                   const SizedBox(height: 16),
 
-                  // Recommended Vaccines
+                  // -------------------- Recommended Vaccines --------------------
                   if (_selectedChild != null && _recommendedVaccines.isNotEmpty)
                     Card(
                       color: Colors.blue.shade50,
@@ -268,7 +287,8 @@ class _ParentCreateAppointmentPageState
                               ],
                             ),
                             const SizedBox(height: 8),
-                            ..._recommendedVaccines.map((vaccine) => Padding(
+                            ..._recommendedVaccines.map((vaccine) =>
+                                Padding(
                                   padding:
                                       const EdgeInsets.symmetric(vertical: 4.0),
                                   child: Row(
@@ -308,7 +328,7 @@ class _ParentCreateAppointmentPageState
                     ),
                   const SizedBox(height: 16),
 
-                  // Vaccine Selection
+                  // -------------------- Vaccine Selector --------------------
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(12.0),
@@ -322,7 +342,6 @@ class _ParentCreateAppointmentPageState
                           TextField(
                             decoration: InputDecoration(
                               labelText: "Search and select vaccine",
-                              hintText: "Type vaccine name",
                               prefixIcon: const Icon(Icons.search),
                               border: const OutlineInputBorder(),
                               suffixIcon: _selectedVaccineId != null
@@ -337,9 +356,9 @@ class _ParentCreateAppointmentPageState
                                     )
                                   : null,
                             ),
-                            onTap: () => _showVaccineSelectionDialog(),
-                            controller: TextEditingController(
-                                text: _selectedVaccineName),
+                            onTap: _showVaccineSelectionDialog,
+                            controller:
+                                TextEditingController(text: _selectedVaccineName),
                             readOnly: true,
                           ),
                         ],
@@ -348,7 +367,7 @@ class _ParentCreateAppointmentPageState
                   ),
                   const SizedBox(height: 16),
 
-                  // Doctor Selection
+                  // -------------------- Doctor Selector --------------------
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(12.0),
@@ -380,36 +399,52 @@ class _ParentCreateAppointmentPageState
                   ),
                   const SizedBox(height: 16),
 
-                  // Date Selection
+                  // -------------------- Appointment Date & Time --------------------
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(12.0),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text("4. Select Date",
+                          const Text("4. Appointment Date & Time",
                               style: TextStyle(
                                   fontSize: 18, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 8),
                           ElevatedButton(
                             onPressed: () async {
-                              DateTime? picked = await showDatePicker(
+                              DateTime? pickedDate = await showDatePicker(
                                 context: context,
                                 initialDate:
                                     DateTime.now().add(const Duration(days: 1)),
                                 firstDate: DateTime.now(),
                                 lastDate: DateTime(2100),
                               );
-                              if (picked != null) {
-                                setState(() => _selectedDate = picked);
-                              }
+
+                              if (pickedDate == null) return;
+
+                              TimeOfDay? pickedTime = await showTimePicker(
+                                context: context,
+                                initialTime:
+                                    const TimeOfDay(hour: 9, minute: 0),
+                              );
+
+                              if (pickedTime == null) return;
+
+                              setState(() {
+                                _selectedAppointmentDateTime = DateTime(
+                                  pickedDate.year,
+                                  pickedDate.month,
+                                  pickedDate.day,
+                                  pickedTime.hour,
+                                  pickedTime.minute,
+                                );
+                              });
                             },
                             style: ElevatedButton.styleFrom(
-                              minimumSize: const Size(double.infinity, 50),
-                            ),
-                            child: Text(_selectedDate == null
-                                ? "Select Date"
-                                : "Selected: ${_selectedDate!.toString().split(' ')[0]}"),
+                                minimumSize: const Size(double.infinity, 50)),
+                            child: Text(_selectedAppointmentDateTime == null
+                                ? "Select Appointment Date & Time"
+                                : _selectedAppointmentDateTime.toString()),
                           ),
                         ],
                       ),
@@ -417,31 +452,81 @@ class _ParentCreateAppointmentPageState
                   ),
                   const SizedBox(height: 16),
 
-                  // Reminder Preference
+                  // -------------------- Reminder Date & Time --------------------
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(12.0),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text("5. Reminder Preference",
+                          const Text("5. Reminder Date & Time",
                               style: TextStyle(
                                   fontSize: 18, fontWeight: FontWeight.bold)),
                           const SizedBox(height: 8),
-                          DropdownButtonFormField<int>(
-                            value: _reminderDaysBefore,
+                          ElevatedButton(
+                            onPressed: () async {
+                              DateTime? pickedDate = await showDatePicker(
+                                context: context,
+                                initialDate: _selectedAppointmentDateTime ??
+                                    DateTime.now().add(const Duration(days: 1)),
+                                firstDate: DateTime.now(),
+                                lastDate: DateTime(2100),
+                              );
+
+                              if (pickedDate == null) return;
+
+                              TimeOfDay? pickedTime = await showTimePicker(
+                                context: context,
+                                initialTime:
+                                    const TimeOfDay(hour: 9, minute: 0),
+                              );
+
+                              if (pickedTime == null) return;
+
+                              setState(() {
+                                _selectedReminderDateTime = DateTime(
+                                  pickedDate.year,
+                                  pickedDate.month,
+                                  pickedDate.day,
+                                  pickedTime.hour,
+                                  pickedTime.minute,
+                                );
+                              });
+                            },
+                            style: ElevatedButton.styleFrom(
+                                minimumSize: const Size(double.infinity, 50)),
+                            child: Text(_selectedReminderDateTime == null
+                                ? "Select Reminder Date & Time"
+                                : _selectedReminderDateTime.toString()),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // -------------------- Repeat Reminder --------------------
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text("6. Repeat Reminder",
+                              style: TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          DropdownButtonFormField<String>(
+                            value: _repeatType,
                             items: const [
-                              DropdownMenuItem(
-                                  value: 0, child: Text("At Appointment Time")),
-                              DropdownMenuItem(
-                                  value: 1, child: Text("1 Day Before")),
-                              DropdownMenuItem(
-                                  value: 2, child: Text("2 Days Before")),
+                              DropdownMenuItem(value: "none", child: Text("No Repeat")),
+                              DropdownMenuItem(value: "daily", child: Text("Repeat Daily")),
+                              DropdownMenuItem(value: "weekly", child: Text("Repeat Weekly")),
+                              DropdownMenuItem(value: "hourly", child: Text("Repeat Hourly")),
                             ],
-                            onChanged: (val) =>
-                                setState(() => _reminderDaysBefore = val ?? 1),
+                            onChanged: (val) => setState(() => _repeatType = val ?? "none"),
                             decoration: const InputDecoration(
-                              labelText: "Select Reminder",
+                              labelText: "Repeat Type",
                               border: OutlineInputBorder(),
                             ),
                           ),
@@ -449,9 +534,11 @@ class _ParentCreateAppointmentPageState
                       ),
                     ),
                   ),
-                  const SizedBox(height: 24),
 
-                  // Submit Button
+                  const SizedBox(height: 24),
+                  const SizedBox(height: 12),
+
+                  // -------------------- Submit --------------------
                   ElevatedButton(
                     onPressed: _saveAppointment,
                     style: ElevatedButton.styleFrom(
@@ -467,14 +554,15 @@ class _ParentCreateAppointmentPageState
     );
   }
 
+  // -------------------- Vaccine Selection Dialog --------------------
   void _showVaccineSelectionDialog() async {
     final snap =
         await FirebaseFirestore.instance.collection("vaccinations").get();
+
     final vaccineDocs = snap.docs
         .map((doc) => {
               "id": doc.id,
               "name": doc.data()["name"] ?? "Unknown",
-              "data": doc.data(),
             })
         .toList();
 
@@ -517,4 +605,6 @@ class _ParentCreateAppointmentPageState
       ),
     );
   }
-}
+} // end of _ParentCreateAppointmentPageState
+
+ // end of ParentCreateAppointmentPage widget

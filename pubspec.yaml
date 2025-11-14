@@ -45,7 +45,7 @@ dependencies:
   path_provider: ^2.1.5
   flutter_local_notifications: ^17.1.0
   timezone: ^0.9.2
-  # maps_launcher: ^2.0.1
+  # workmanager: ^0.5.1
 
 dev_dependencies:
   flutter_test:
@@ -102,4 +102,5 @@ flutter:
 
 # Ensure no other package resolves a newer maps_launcher
 # dependency_overrides:
+#   maps_launcher: 2.0.1
 #   maps_launcher: 2.0.1

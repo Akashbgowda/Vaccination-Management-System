@@ -7,6 +7,10 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
+
 import '../../utils/logoutuser.dart';
 import '../../utils/vaccination_schedule.dart';
 import '../../components/CustomBottomNav.dart';
@@ -15,6 +19,64 @@ import 'ParentReportPage.dart';
 
 class ParentHomePage extends StatelessWidget {
   const ParentHomePage({super.key});
+
+  Future<void> _debugInstantNotification() async {
+    final plugin = FlutterLocalNotificationsPlugin();
+
+    await plugin.show(
+      1111,
+      "Instant Test",
+      "This should appear immediately.",
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          'instant_channel',
+          'Instant Notifications',
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+      ),
+    );
+  }
+
+Future<void> _debugTestNotification() async {
+  // initialize timezone database before creating TZDateTime
+  tz_data.initializeTimeZones();
+
+  final flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  // Request exact alarm permission (Android 12+)
+  final androidPlugin = flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+
+  if (androidPlugin != null) {
+    await androidPlugin.requestExactAlarmsPermission();
+  }
+
+  // Schedule a notification 5 seconds from now
+  final scheduledTime =
+      DateTime.now().add(const Duration(seconds: 5));
+  final tzTime = tz.TZDateTime.from(scheduledTime, tz.local);
+
+  await flutterLocalNotificationsPlugin.zonedSchedule(
+    987654321, // random id
+    "Test Notification",
+    "If you see this, notifications work!",
+    tzTime,
+    NotificationDetails(
+      android: AndroidNotificationDetails(
+        'test_channel',
+        'Test Notifications',
+        importance: Importance.max,
+        priority: Priority.high,
+      ),
+    ),
+    androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+    uiLocalNotificationDateInterpretation:
+        UILocalNotificationDateInterpretation.absoluteTime,
+  );
+}
 
   Future<void> _launchGoogleMaps(String query) async {
     final encodedQuery = Uri.encodeComponent(query);
@@ -688,6 +750,35 @@ class ParentHomePage extends StatelessWidget {
               ],
             ),
           ),
+
+          // Padding(
+          //   padding: const EdgeInsets.all(12.0),
+          //   child: ElevatedButton.icon(
+          //     onPressed: () {
+          //       print("🔔 Triggering test notification...");
+          //       _debugTestNotification();
+          //     },
+          //     icon: const Icon(Icons.notifications_active),
+          //     label: const Text("Test Notification (Debug)"),
+          //     style: ElevatedButton.styleFrom(
+          //       minimumSize: const Size(double.infinity, 50),
+          //       backgroundColor: Colors.orange,
+          //       foregroundColor: Colors.white,
+          //     ),
+          //   ),
+          // ),
+          // Padding(
+          //   padding: const EdgeInsets.symmetric(horizontal: 12.0),
+          //   child: ElevatedButton(
+          //     onPressed: _debugInstantNotification,
+          //     child: const Text("Instant Notification Test"),
+          //     style: ElevatedButton.styleFrom(
+          //       minimumSize: const Size(double.infinity, 44),
+          //       backgroundColor: Colors.orangeAccent,
+          //       foregroundColor: Colors.white,
+          //     ),
+          //   ),
+          // ),
           Expanded(
             child: FutureBuilder(
               future: _fetchChildrenWithAppointments(),
